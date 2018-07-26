@@ -1,0 +1,6 @@
+10/26
+
+cv::cuda::GpuMat
+cv::Mat
+同一関数を使いまわせる場合は，templateを使う
+GpuMatに最適化する場合は

@@ -1,0 +1,66 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CudaCompile Include="arithmetic_test.cu" />
+    <CudaCompile Include="dummy_kernel.cu" />
+    <CudaCompile Include="fractale_compressor_gpu.cu" />
+    <CudaCompile Include="affine_transformer_gpu.cu" />
+    <CudaCompile Include="fractale_compressor_gpu_reduce_domains.cu" />
+    <CudaCompile Include="fractale_compressor_gpu_reduce_ranges.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="images.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="config.cpp" />
+    <ClCompile Include="transform_generator.cpp" />
+    <ClCompile Include="fractale_compressor.cpp" />
+    <ClCompile Include="fractale_decompressor.cpp" />
+    <ClCompile Include="affine_transformer.cpp" />
+    <ClCompile Include="jpeg_exporter.cpp" />
+    <ClCompile Include="comparators.cpp" />
+    <ClCompile Include="csv_util.cpp" />
+    <ClCompile Include="fif_util.cpp" />
+    <ClCompile Include="test.cpp" />
+    <ClCompile Include="ifs_transform_data.cpp" />
+    <ClCompile Include="fractale_compressor_gpu_rgb.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="arithmetic_test.cuh" />
+    <ClInclude Include="compress_data.hpp" />
+    <ClInclude Include="config.hpp" />
+    <ClInclude Include="cuda_call_checker.cuh" />
+    <ClInclude Include="dummy_kernel.cuh" />
+    <ClInclude Include="images.hpp" />
+    <ClInclude Include="transform_generator.hpp" />
+    <ClInclude Include="ifs_transform_data.hpp" />
+    <ClInclude Include="fractale_compressor.hpp" />
+    <ClInclude Include="fractale_compressor_gpu.cuh" />
+    <ClInclude Include="fractale_decompressor.hpp" />
+    <ClInclude Include="affine_transformer_gpu.cuh" />
+    <ClInclude Include="affine_transformer.hpp" />
+    <ClInclude Include="jpeg_exporter.hpp" />
+    <ClInclude Include="comparators.hpp" />
+    <ClInclude Include="csv_util.hpp" />
+    <ClInclude Include="fif_util.hpp" />
+    <ClInclude Include="test.hpp" />
+    <ClInclude Include="fractale_compressor_gpu_rgb.cuh" />
+    <ClInclude Include="fractale_compressor_gpu_reduce_domains.cuh" />
+    <ClInclude Include="fractale_compressor_gpu_reduce_ranges.cuh" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="resource\lena-512x512.png">
+      <Filter>resource</Filter>
+    </Image>
+    <Image Include="resource\boy-256x256.png">
+      <Filter>resource</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="resource">
+      <UniqueIdentifier>{c0720161-dbbd-457f-9b22-6916bd54acbc}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
+</Project>
