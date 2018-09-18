@@ -15,18 +15,22 @@ const bool config::enable_transform_generator = false;
 const bool config::enable_cpu_opencv_compress = false;
 const bool config::enable_cpu_opencv_decompress = false;
 
-const bool config::enable_gpu_opencv_compress = true;
+const bool config::enable_gpu_opencv_compress = false;
 
 const bool config::enable_gpu_compress = false;
 const bool config::enable_gpu_reduce_domains_compress = false;
+const bool config::enable_gpu_reduce_ranges_compress = false;
 
-const bool config::enable_jpeg_compress = false;
+const bool config::enable_jpeg_compress = true;
+const bool config::enable_jpeg_output = true;
+const bool config::enable_jpeg_repeat = true;
+const bool config::enable_jpeg_output_statistics = true;
 
 const bool config::show_decompress_process = true;
 const bool config::output_decompress_process_image = false;
 const bool config::output_decompress_image = true;
 
-const bool config::show_demo = false;
+const bool config::show_demo = true;
 /*
 	ÉtÉâÉNÉ^Éãà≥èkÇ…ä÷Ç∑ÇÈê›íË
 */

@@ -941,6 +941,16 @@ void fcr_img2blockarray(cv::Mat img, uint8_t* img_array, uint32_t block_size){
 
 }
 
+/*
+input:
+	cv::Mat img			: 一般的な画像の形式
+	uint32_t blocksize	:ブロックの大きさ
+return;
+	std::vector<ifs_transformer*> : 出力符号列
+
+	フラクタル圧縮の圧縮を行う一連のGPUカーネルを呼び
+	imgを符号化する
+*/
 std::vector<ifs_transformer*> launch_compress_kernel(cv::Mat img, uint32_t blocksize)
 {	
 	/*

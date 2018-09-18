@@ -1,5 +1,6 @@
 /*
-	GPUのレンジ数を減らした実装
+	フラクタル画像圧縮のレンジ数を減らした実装
+	レンジ数を減らした実装
 */
 
 #pragma once
@@ -9,9 +10,11 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 
+#include "ifs_transform_data.hpp"
+
 /*
-ブロック内のスレッド数がこの値になるように努力する
-1024以下である必要がある
+	ブロック内のスレッド数がこの値になるように努力する
+	1024以下である必要がある
 */
 #define THREADBLOCK_MAX 1024
 
@@ -27,3 +30,5 @@ struct compress_data_part_reduce_ranges_gpu {
 	//0 = 0', 1 = 90', 2 = 180', 3 = 270'
 	uint8_t rotate;
 };
+
+std::vector<ifs_transformer*> launch_reduce_ranges_compress_kernel(cv::Mat img, uint32_t reduce_range_config);

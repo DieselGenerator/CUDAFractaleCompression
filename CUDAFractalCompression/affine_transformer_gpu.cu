@@ -1,3 +1,6 @@
+//コンスタントメモリはグローバル変数にできない
+//ということで別ファイルからアクセスできない為，deprecated
+
 #include <iostream>
 
 #include <inttypes.h>

@@ -23,8 +23,12 @@ struct config {
 
 	static const bool enable_gpu_compress;
 	static const bool enable_gpu_reduce_domains_compress;
+	static const bool enable_gpu_reduce_ranges_compress;
 
 	static const bool enable_jpeg_compress;
+	static const bool enable_jpeg_output;
+	static const bool enable_jpeg_repeat;
+	static const bool enable_jpeg_output_statistics;
 
 	static const bool show_decompress_process;
 	static const bool output_decompress_process_image;
