@@ -18,12 +18,21 @@ struct config {
 
 	static const bool enable_cpu_opencv_compress;
 	static const bool enable_cpu_opencv_decompress;
+	static const bool enable_cpu_opencv_output;
 
 	static const bool enable_gpu_opencv_compress;
 
 	static const bool enable_gpu_compress;
+	static const bool enable_gpu_decompress;
+	static const bool enable_gpu_output;
+
 	static const bool enable_gpu_reduce_domains_compress;
+	static const bool enable_gpu_reduce_domains_decompress;
+	static const bool enable_gpu_reduce_domains_output;
+
 	static const bool enable_gpu_reduce_ranges_compress;
+	static const bool enable_gpu_reduce_ranges_decompress;
+	static const bool enable_gpu_reduce_ranges_output;
 
 	static const bool enable_jpeg_compress;
 	static const bool enable_jpeg_output;
