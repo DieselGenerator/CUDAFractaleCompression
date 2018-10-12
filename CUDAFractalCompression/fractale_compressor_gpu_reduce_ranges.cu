@@ -261,13 +261,16 @@ void init_fcrr_affine_transformer(int size) {
 
 	if (size == 4) {
 		CHECK(cudaMemcpyToSymbol(dc_affine_transform_size4, h_affine_transform_size4, sizeof(uint8_t) * 7 * 16));
+		std::cout << "size 4 copyed" << std::endl;
 	}
 	//cudaMemC
 	else if (size == 8) {
 		CHECK(cudaMemcpyToSymbol(dc_affine_transform_size8, h_affine_transform_size8, sizeof(uint8_t) * 7 * 64));
+		std::cout << "size 8 copyed" << std::endl;
 	}
 	else if (size == 16) {
 		CHECK(cudaMemcpyToSymbol(dc_affine_transform_size16, h_affine_transform_size16, sizeof(uint8_t) * 7 * 256));
+		std::cout << "size 16 copyed" << std::endl;
 	}
 	CHECK(cudaDeviceSynchronize());
 }
@@ -285,8 +288,8 @@ output:
 	のblock_x, block_yがブロックの大きさになる
 */
 __global__ void fcrr_make_domains_n_ranges(uint8_t* d_orig_img, 
-									     uint8_t* d_ranges,
-									     uint8_t* d_domains){
+									       uint8_t* d_ranges,
+									       uint8_t* d_domains){
 
 	uint32_t rdblock_id = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x * blockDim.y;
 	uint32_t rdblock_thread_id = blockDim.x * threadIdx.y + threadIdx.x;
@@ -318,10 +321,10 @@ __global__ void fcrr_make_domains_n_ranges(uint8_t* d_orig_img,
 	dim3 fc2dgrid(dblock_count / fc2dblock.z);
 */
 __global__ void fcrr_domain_summimmax(uint8_t* d_domains,
-								    uint32_t dblock_count,
-									uint32_t* dblock_sum,
-								    uint32_t* dblock_min,
-								    uint32_t* dblock_max) 
+								      uint32_t dblock_count,
+									  uint32_t* dblock_sum,
+								      uint32_t* dblock_min,
+								      uint32_t* dblock_max) 
 {
 	//sum, min, maxの3種を保存する
 	__shared__ uint32_t domain_summinmax[THREADBLOCK_MAX * 3];
@@ -512,6 +515,28 @@ __global__ void fcrr_calc_scale_n_shift(uint32_t* d_dblock_sum,
 		}
 		d_contrast_scaling[array_id] = 1;
 	}
+
+
+
+	//d_contrast_scaling[array_id] = raw_scaling;
+
+
+	/*
+		TODO 基本的に4bit内に縮小する必要が有る為，
+		スケーリングの情報は圧縮して保持される必要がある
+	*/
+
+	//double min;
+	//double max;
+	//uint32_t scaling;
+	//for (min = -0.03125, max = 0.03125, scaling = 0; scaling < 16; min += 0.0625, max += 0.0625, scaling++) {
+	//	if (min < raw_scaling && raw_scaling < max){
+	//		d_brightness_shift[array_id] = scaling;
+	//		return;
+	//	}
+	//}
+	////0.9625以上は全部15に・・・？
+	//d_brightness_shift[array_id] = 0xF;
 }
 
 /*
@@ -523,7 +548,11 @@ __global__ void fcrr_transform_n_calc_mse(uint8_t* d_domains,
 										uint8_t* d_ranges,
 										double* d_contrast_scaling,
 										uint32_t* d_brightness_shift,
-										uint32_t* d_mse)
+										uint32_t* d_mse,
+										bool is_inner,
+										uint32_t periphery,
+										uint32_t rblock_cols,
+										uint32_t rblock_rows)
 {
 	__shared__ uint32_t mse_all[THREADBLOCK_MAX];
 
@@ -533,6 +562,29 @@ __global__ void fcrr_transform_n_calc_mse(uint8_t* d_domains,
 	uint32_t dblock_count = gridDim.x;
 	uint32_t rblock_id = blockIdx.y * blockDim.z + threadIdx.z;
 	uint32_t rblock_count = gridDim.y * blockDim.z;
+
+	/*このスレッドが外周部分を担当しているかどうかのフラグ*/
+	bool is_this_thread_outer = (rblock_id < rblock_cols * periphery/*上部*/ ||
+								rblock_id >= rblock_count - rblock_cols * periphery/*下部*/ ||
+								(rblock_id % rblock_cols) < periphery /*左部*/ ||
+								(rblock_id % rblock_cols) >= rblock_cols - periphery)/*右部*/;
+
+	if (is_inner == is_this_thread_outer) {
+		return;
+	}
+
+	/*
+	if (is_inner) {
+		if (is_this_thread_outer){
+			return;
+		}
+	}
+	else {
+		if (!is_this_thread_outer) {
+			return;
+		}
+	}
+	*/
 
 	uint32_t array_id = dblock_id * rblock_count + rblock_id;
 
@@ -598,31 +650,38 @@ __global__ void fcrr_transform_n_calc_mse(uint8_t* d_domains,
 */
 __global__ void fcrr_save_min_mse(uint32_t dblock_cols,
 								uint32_t dblock_rows,
-								uint32_t dblock_limit,
 								uint32_t blocksize,
 								uint32_t* d_mse, 
 								double* d_cotrast_scaling, 
 								uint32_t* d_brightness_shift, 
-								compress_data_part_reduce_ranges_gpu* d_compress_data_part_gpu) 
+								compress_data_part_reduce_ranges_gpu* d_compress_data_part_gpu,
+								bool is_inner,
+								uint32_t periphery,
+								uint32_t rblock_cols,
+								uint32_t rblock_rows) 
 {
 	uint32_t rblock_id = blockDim.x * blockIdx.x + threadIdx.x;
 	uint32_t rblock_count = gridDim.x * blockDim.x;
-	uint32_t dblock_count = dblock_limit;
+	uint32_t dblock_count = dblock_cols * dblock_rows;
 	
 	uint32_t best_mse = UINT32_MAX;
 
-	//if (rblock_id == 16000) {
-	//	printf("gegege2\n");
-	//}
-	
+	/*このスレッドが外周部分を担当しているかどうかのフラグ*/
+	bool is_this_thread_outer = (rblock_id < rblock_cols * periphery/*上部*/ ||
+								rblock_id >= rblock_count - rblock_cols * periphery/*下部*/ ||
+								(rblock_id % rblock_cols) < periphery /*左部*/ ||
+								(rblock_id % rblock_cols) >= rblock_cols - periphery)/*右部*/;
+
+	if (is_inner == is_this_thread_outer) {
+		return;
+	}
+
 	for (uint32_t dblock_y = 0; dblock_y < dblock_rows; dblock_y++) {
 		for (uint32_t dblock_x = 0; dblock_x < dblock_cols; dblock_x++) {
 			for (uint8_t rotate = 0; rotate < 7; rotate++) {
 				uint32_t dblock_id = dblock_cols * dblock_y + dblock_x;
 				uint32_t array_id = dblock_id * rblock_count + rblock_id;
-				if (dblock_id > dblock_limit) {
-					break;
-				}
+
 				/*
 					応急処置
 				*/
@@ -637,53 +696,13 @@ __global__ void fcrr_save_min_mse(uint32_t dblock_cols,
 					d_compress_data_part_gpu[rblock_id].scale = d_cotrast_scaling[array_id];
 					d_compress_data_part_gpu[rblock_id].shift = d_brightness_shift[array_id];
 				}
+				//if (rotate == 4 && dblock_x == 0 && dblock_y == 0 && blockIdx.x == 0 && threadIdx.x == 999) {
+				//	printf("reached rotate == 3 value : %" PRIu32"\n best value : %" PRIu32"\n", d_mse[rotate * dblock_count * rblock_count + array_id], best_mse);
+				//}
 			}
 		}
 	}
 
-}
-
-/*
-	//
-	画像を縦横1/2倍に縮小する
-	4点の平均値を算出するだけの方式
-	カーネルでブロックサイズを合わせる
-	元ブロックサイズを
-	元カネールの
-	fc_resize2<<<(grid_x, grid_y), (block_x, block_y, n)>>>(i, o, size);
-*/
-__global__ void fcrr_resize2(uint8_t* d_original_img, uint8_t* d_resize_img, uint32_t original_width) {
-	//blockDim.x, blockDim.yはリサイズ後のブロックサイズ
-	//blockの数自体は変換前後で一定
-	uint32_t blocks_num = gridDim.x;//original_width / blockDim.x;
-
-	//resize後ブロックの大きさ
-	uint32_t resize_block_total = blockDim.x * blockDim.y;
-	//resize後ブロックの配列の先頭index
-	uint32_t resize_block_index = (blockIdx.y * blocks_num + blockIdx.x) * resize_block_total;
-	//resize後ブロック内スレッドのindex
-	uint32_t resize_thread_index = threadIdx.y * blockDim.y + threadIdx.x;
-
-	//元ブロックの大きさ
-	uint32_t orig_block_total = resize_block_total << 2;
-	//元ブロックの大きさの配列の先頭index
-	uint32_t orig_block_index = (blockIdx.y * blocks_num + blockIdx.x) * orig_block_total;
-	//resize後ブロック内スレッドのindex1
-	uint32_t orig_thread_index1 = (threadIdx.y << 1) * (blockDim.y << 1) + (threadIdx.x << 1);
-	//resize後ブロック内スレッドのindex2
-	uint32_t orig_thread_index2 = (threadIdx.y << 1) * (blockDim.y << 1) + (threadIdx.x << 1) + 1;
-	//resize後ブロック内スレッドのindex3
-	uint32_t orig_thread_index3 = ((threadIdx.y << 1) + 1) * (blockDim.y << 1) + (threadIdx.x << 1);
-	//resize後ブロック内スレッドのindex4
-	uint32_t orig_thread_index4 = ((threadIdx.y << 1) + 1) * (blockDim.y << 1) + (threadIdx.x << 1) + 1;
-
-	//resize後ブロック内スレッド
-	uint32_t idx1 = d_original_img[orig_block_index + orig_thread_index1];
-	uint32_t idx2 = d_original_img[orig_block_index + orig_thread_index2];
-	uint32_t idx3 = d_original_img[orig_block_index + orig_thread_index3];
-	uint32_t idx4 = d_original_img[orig_block_index + orig_thread_index4];
-
-	d_resize_img[resize_block_index + resize_thread_index] = (uint8_t)((idx1 + idx2 + idx3 + idx4) >> 2);
 }
 
 /*
@@ -694,9 +713,10 @@ __global__ void fcrr_resize2(uint8_t* d_original_img, uint8_t* d_resize_img, uin
 	  8, 9,10,11,
 	 12,13,14,14} -> {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 */
-void fcrr_img2array(uint8_t* img_array, cv::Mat img) {
-	//assert(img.isContinuous());
+void fcrr_img2array(cv::Mat img, uint8_t* img_array) {
+	assert(img.isContinuous());
 	img.convertTo(img, CV_8UC1);
+
 
 	for (uint32_t y = 0; y < img.rows; y++) {
 		for (uint32_t x = 0; x < img.cols; x++) {
@@ -707,312 +727,316 @@ void fcrr_img2array(uint8_t* img_array, cv::Mat img) {
 
 /*
 input:
-	cv::Mat img		: 一般的な画像の形式
-output:
-	uint32_t blocksize	:ブロック化された画像の形式
-	uint32_t reduce_range_config	:ブロック化された画像の形式 画像サイズ1/2 ブロックサイズは同じ
+	cv::Mat img			: 一般的な画像の形式
+	uint32_t blocksize	:ブロックの大きさ
+	bool is_inner		:内部のブロックを処理するカーネルであるか
+	periphery			:外周何周分を無視orのみ実行するか．
+return;
+	std::vector<ifs_transformer*> : 出力符号列
 
-	フラクタル圧縮に必要な画像配列を生成する
-	カーネルを呼ぶ時のブロック数でドメイン（圧縮），レンジのブロックを決定する
-	fc_make_range_n_domain<<<grid, (block_x, block_y)>>>
-	のblock_x, block_yがブロックの大きさになる
+	is_innerがtrueの場合，外周periphery数値分だけ無視して演算を行う（スレッドは起動するが，内部は空）
+	is_innerがfalseの場合，外周部分のみ実行する
 
-	指定されたレンジ設定に従って圧縮を行う
-	その他はオリジナルカーネルと同じ
+	フラクタル圧縮の圧縮を行う一連のGPUカーネルを呼び
+	imgを符号化する
 */
-std::vector<ifs_transformer*> launch_reduce_ranges_compress_kernel(cv::Mat img, uint32_t reduce_range_config)
-{
+std::vector<ifs_transformer*> launch_reduce_ranges_compress_kernel(cv::Mat img, uint32_t blocksize, bool is_inner, uint32_t periphery)
+{	
 	/*
 		0.前提条件
 	*/
-	//ドメイン・レンジ外周ブロック１辺の長さ
-	uint32_t dr_outer_blocksize;
-	//ドメイン・レンジ内周ブロック１辺の長さ
-	uint32_t dr_inner_blocksize;
-	//外周を何周目までと定義するか
-	uint32_t periphery_size;
 
-	switch (reduce_range_config)
-	{
-	case 0:
-		dr_outer_blocksize = 8;
-		dr_inner_blocksize = 4;
-		periphery_size = 1;
-		break;
-	default:
-		dr_outer_blocksize = 8;
-		dr_inner_blocksize = 4;
-		periphery_size = 1;
-		break;
-	}
+	//ドメイン・レンジブロックの１辺の長さ
+	uint32_t dr_blocksize = blocksize;
+	//ブロック1つが含む画素数
+	uint32_t dr_block_pixel_total = dr_blocksize * dr_blocksize;
+	//レンジブロックの辺当たりの数
+	uint32_t rblock_cols = img.cols / dr_blocksize;
+	uint32_t rblock_rows = img.rows / dr_blocksize;
+	uint32_t rblock_count = rblock_cols * rblock_rows;
+	//ドメインブロックの辺辺りの数
+	uint32_t dblock_cols = rblock_cols >> 1;
+	uint32_t dblock_rows = rblock_rows >> 1;
+	uint32_t dblock_count = dblock_cols * dblock_rows;
 
-	//外周ブロック1つが含む画素数
-	uint32_t dr_outer_block_pixel_total = dr_outer_blocksize * dr_outer_blocksize;
-	//内周ブロック1つが含む画素数
-	uint32_t dr_inner_block_pixel_total = dr_inner_blocksize * dr_inner_blocksize;
+	assert(blocksize == 4 || blocksize == 8 || blocksize == 16);
+	assert((img.cols % blocksize) == 0);
+	assert((img.rows % blocksize) == 0);
+	assert(dblock_count % (THREADBLOCK_MAX / blocksize) == 0);
+	assert(rblock_count % (THREADBLOCK_MAX / blocksize) == 0);
+	assert(((rblock_count * dblock_count) % THREADBLOCK_MAX) == 0);
+	assert(rblock_count < (65535 * THREADBLOCK_MAX));
 
-	//外周レンジブロックの辺当たりの数
-	uint32_t rblock_outer_cols = img.cols / dr_outer_blocksize;
-	uint32_t rblock_outer_rows = img.rows / dr_outer_blocksize;
-	uint32_t rblock_outer_sum = rblock_outer_cols * rblock_outer_rows;
-
-	//内周レンジブロックの辺当たりの数
-	uint32_t rblock_inner_cols = img.cols / dr_inner_blocksize;
-	uint32_t rblock_inner_rows = img.rows / dr_inner_blocksize;
-	uint32_t rblock_inner_sum = rblock_inner_cols * rblock_inner_rows;
-
-	//外周レンジブロックの総数
-	uint32_t rblock_outer_count = (2 * periphery_size) * (rblock_outer_cols + rblock_outer_rows - 2 * periphery_size);
-	// (rblock_outer_cols * rblock_outer_rows) - ((rblock_outer_cols - 2 * periphery_size) * (rblock_outer_rows - 2 * periphery_size));
-	//内周レンジブロックの総数
-	uint32_t rblock_inner_count = (rblock_inner_cols - 2 * periphery_size) * (rblock_inner_rows - 2 * periphery_size);
-
-	//外周用ドメインブロックの辺当たりの数
-	uint32_t dblock_outer_cols = rblock_outer_cols >> 1;
-	uint32_t dblock_outer_rows = rblock_outer_rows >> 1;
-	uint32_t dblock_outer_count = dblock_outer_cols * dblock_outer_rows;
-
-	//内周用ドメインブロックの辺当たりの数
-	uint32_t dblock_inner_cols = rblock_inner_cols >> 1;
-	uint32_t dblock_inner_rows = rblock_inner_rows >> 1;
-	uint32_t dblock_inner_count = dblock_inner_cols * dblock_inner_rows;
-
-	std::cout << "domain block for outer count : " << dblock_outer_count << std::endl;
-	std::cout << "domain block for inner count : " << dblock_inner_count << std::endl;
-	std::cout << "outer range block count : " << rblock_outer_count << std::endl;
-	std::cout << "inner range block count : " << rblock_inner_count << std::endl;
+	std::cout << "domain block count : " << dblock_count << std::endl;
+	std::cout << "range block count : " << rblock_count << std::endl;
 
 	/*
 		1.ブロック変換・縮小変換
 	*/
-	//ブロック変換・縮小変換の為の起動スレッド数設定
-	dim3 fc1block_outer(dr_outer_blocksize, dr_outer_blocksize);
-	dim3 fc1grid_outer(rblock_outer_cols, rblock_outer_rows);
 
-	dim3 fc1block_inner(dr_inner_blocksize, dr_inner_blocksize);
-	dim3 fc1grid_inner(rblock_inner_cols, rblock_inner_rows);
-	
-	//元画像の領域を確保
+	//ブロック変換・縮小変換の為の起動スレッド数設定
+	dim3 fc1block(dr_blocksize, dr_blocksize);
+	dim3 fc1grid(rblock_cols, rblock_rows);
+	std::cout << "reduction grid :" << " x = " << fc1grid.x << " y = " << fc1grid.y << std::endl;
 	uint32_t orig_arraysize = img.total() * img.channels();
 	uint8_t* h_orig_img = new uint8_t[orig_arraysize];
-
-	//デバイス側の領域を確保
 	uint8_t* d_orig_img;
-	CHECK(cudaMalloc((void**)&d_orig_img, sizeof(uint8_t) * orig_arraysize));
-
-	fcrr_img2array(h_orig_img, img);
-
 	uint8_t* d_ranges;
 	uint8_t* d_domains;
-	//uint8_t* d_inner_domains;
+	
+	CHECK(cudaMalloc((void**)&d_orig_img, sizeof(uint8_t) * orig_arraysize));
+	CHECK(cudaMalloc((void**)&d_ranges, sizeof(uint8_t) * orig_arraysize));
+	CHECK(cudaMalloc((void**)&d_domains, sizeof(uint8_t) * orig_arraysize >> 2));
 
+	fcrr_img2array(img, h_orig_img);
 
+	CHECK(cudaMemcpy(d_orig_img, h_orig_img, sizeof(uint8_t) * orig_arraysize, cudaMemcpyHostToDevice));
+	fcrr_make_domains_n_ranges<<<fc1grid, fc1block>>>(d_orig_img, d_ranges, d_domains);
+	CHECK(cudaDeviceSynchronize());
+
+	//uint8_t* h_ranges = new uint8_t[orig_arraysize];
+	//uint8_t* h_domains = new uint8_t[orig_arraysize >> 2];
+	//CHECK(cudaMemcpy(h_ranges, d_ranges, sizeof(uint8_t) * orig_arraysize, cudaMemcpyDeviceToHost));
+	//CHECK(cudaMemcpy(h_domains, d_domains, sizeof(uint8_t) * orig_arraysize >> 2, cudaMemcpyDeviceToHost));
+	//show_img2(h_ranges, img.cols, img.rows, dr_blocksize);
+	//show_img2(h_domains, img.cols >> 1, img.rows >> 1, dr_blocksize);
+
+	/*
+		2.ドメイン・レンジの総和・最小値最大値計算
+	*/
+
+	//１つのスレッドブロックで複数のドメインを処理する
+	dim3 fc2dblock(dr_blocksize, dr_blocksize, THREADBLOCK_MAX / dr_block_pixel_total);
+	dim3 fc2dgrid(dblock_count / fc2dblock.z);
+
+	uint32_t* d_dblock_sum;
+	uint32_t* d_dblock_min;
+	uint32_t* d_dblock_max;
+	CHECK(cudaMalloc((void**)&d_dblock_sum, sizeof(uint32_t) * dblock_count));
+	CHECK(cudaMalloc((void**)&d_dblock_min, sizeof(uint32_t) * dblock_count));
+	CHECK(cudaMalloc((void**)&d_dblock_max, sizeof(uint32_t) * dblock_count));
+	fcrr_domain_summimmax<<<fc2dgrid, fc2dblock>>>(d_domains, dblock_count, d_dblock_sum, d_dblock_min, d_dblock_max);
+
+	//１つのスレッドブロックで複数のレンジを処理する
+	dim3 fc2rblock(dr_blocksize, dr_blocksize, THREADBLOCK_MAX / dr_block_pixel_total);
+	dim3 fc2rgrid(rblock_count / fc2rblock.z);
+	uint32_t* d_rblock_sum;
+	uint32_t* d_rblock_min;
+	uint32_t* d_rblock_max;
+	CHECK(cudaMalloc((void**)&d_rblock_sum, sizeof(uint32_t) * rblock_count));
+	CHECK(cudaMalloc((void**)&d_rblock_min, sizeof(uint32_t) * rblock_count));
+	CHECK(cudaMalloc((void**)&d_rblock_max, sizeof(uint32_t) * rblock_count));
+	fcrr_range_summimmax<<<fc2rgrid, fc2rblock>>>(d_ranges, rblock_count, d_rblock_sum, d_rblock_min, d_rblock_max);
+
+	CHECK(cudaDeviceSynchronize());
+
+	/*
+		3.コントラストスケーリング・輝度シフト計算
+	*/
+
+	dim3 fc3block(THREADBLOCK_MAX);
+	dim3 fc3grid(dblock_count, rblock_count / THREADBLOCK_MAX);
+
+	double* d_contrast_scaling;
+	uint32_t* d_brightness_shift;
+
+	CHECK(cudaMalloc((void**)&d_contrast_scaling, sizeof(double) * dblock_count * rblock_count));
+	CHECK(cudaMalloc((void**)&d_brightness_shift, sizeof(uint32_t) * dblock_count * rblock_count));
+	//CHECK(cudaMalloc((void**)&d_adjust_domains_for_ranges, sizeof(uint32_t) * dblock_count * rblock_count * dr_block_pixel_total));
+
+	//std::cout << "fc3grid : " << fc3grid.operator uint3 << "fc3block : " << fc3grid << std::endl;
+
+	fcrr_calc_scale_n_shift<<<fc3grid, fc3block>>>(d_dblock_sum,
+												 d_dblock_min,
+												 d_dblock_max,
+												 d_rblock_sum,
+									     		 d_rblock_min,
+												 d_rblock_max,
+												 dr_block_pixel_total,
+											     d_contrast_scaling,
+											     d_brightness_shift);
+
+	CHECK(cudaDeviceSynchronize());
+
+	/*
+		4.コントラストスケーリング・輝度シフト適用・回転・鏡像変換・二乗計算・MSE計算（リダクション）
+	*/
+	//ブロックサイズに応じたコンスタントメモリを初期化する
+	init_fcrr_affine_transformer(dr_blocksize);
+	CHECK(cudaDeviceSynchronize());
+	dim3 fc4block(dr_blocksize, dr_blocksize, THREADBLOCK_MAX / dr_block_pixel_total);
+	dim3 fc4grid(dblock_count , rblock_count / fc4block.z);
+	//各レンジの各ドメインの各回転変換後のMSEを保存しておく
+	uint32_t* d_mse;
+	CHECK(cudaMalloc((void**)&d_mse, sizeof(uint32_t) * rblock_count * dblock_count * 8));
+
+	fcrr_transform_n_calc_mse<<<fc4grid, fc4block>>>(d_domains,
+												     d_ranges,
+												     d_contrast_scaling,
+												     d_brightness_shift,
+												     d_mse,
+													 is_inner,
+													 periphery,
+													 rblock_cols,
+													 rblock_rows);
+
+	CHECK(cudaDeviceSynchronize());
+	//std::cout << sizeof(uint32_t) * rblock_count * dblock_count * 8 << "byte" << std::endl;
+
+	//uint32_t* h_mse = new uint32_t[rblock_count * dblock_count * 8];
+	//CHECK(cudaMemcpy(h_mse, d_mse, sizeof(uint32_t) * rblock_count * dblock_count * 8, cudaMemcpyDeviceToHost));
+
+	//std::cout << "nukiuti : " << h_mse[231] << std::endl;
+
+	//delete[] h_mse;
+
+	/*
+		5.各レンジ毎最小MSE・index計算(リダクション諦め)
+	*/
+
+	dim3 fc5block(THREADBLOCK_MAX);
+	dim3 fc5grid(rblock_count/ THREADBLOCK_MAX);
+
+	//レンジの数だけ圧縮データを保存する
+	compress_data_part_reduce_ranges_gpu* h_compress_data = new compress_data_part_reduce_ranges_gpu[rblock_count];
+	compress_data_part_reduce_ranges_gpu* d_compress_data;
+	CHECK(cudaMalloc((void**)&d_compress_data, sizeof(compress_data_part_reduce_ranges_gpu) * rblock_count));
+
+	fcrr_save_min_mse<<<fc5grid, fc5block>>>(dblock_cols,
+											 dblock_rows,
+											 blocksize, d_mse, 
+											 d_contrast_scaling,
+											 d_brightness_shift, 
+											 d_compress_data,
+											 is_inner,
+											 periphery,
+											 rblock_cols,
+											 rblock_rows);
+	CHECK(cudaDeviceSynchronize());
+	CHECK(cudaMemcpy(h_compress_data, d_compress_data, sizeof(compress_data_part_reduce_ranges_gpu) * rblock_count, cudaMemcpyDeviceToHost));
+
+	/*
+		6.HOST側のデータを共通の形式に加工
+	*/
+
+	CHECK(cudaDeviceSynchronize());
 
 	std::vector<ifs_transformer*> ifs_data;
 
+	for (int32_t i = 0; i < rblock_count; i++) {
+		/*このスレッドが外周部分を担当しているかどうかのフラグ*/
+		bool is_this_thread_outer = (i < rblock_cols * periphery/*上部*/ ||
+			i >= rblock_count - rblock_cols * periphery/*下部*/ ||
+			(i % rblock_cols) < periphery /*左部*/ ||
+			(i % rblock_cols) >= rblock_cols - periphery)/*右部*/;
+
+		if (is_inner == is_this_thread_outer) {
+			continue;
+		}
+
+		//std::cout << h_compress_data[i].rotate << std::endl;
+		ifs_transformer* c = new ifs_transformer();
+		c->error = std::numeric_limits<double>::max();
+		c->rblock_x = (h_compress_data[i].rblock_id % rblock_rows)*blocksize;
+		c->rblock_y = (h_compress_data[i].rblock_id / rblock_rows)*blocksize;
+		c->dblock_x = (h_compress_data[i].dblock_id % dblock_rows)*blocksize;
+		c->dblock_y = (h_compress_data[i].dblock_id / dblock_rows)*blocksize;
+		c->affine = h_compress_data[i].rotate;
+
+		//std::cout << "h_comp:  " << h_compress_data[i].scale << std::endl;
+
+		uint8_t scaling_save = 0;
+		for (double j = 0.0625; j < 1; j += 0.0625) {
+			//if ((j - 0.0625) <= h_compress_data[i].scale && h_compress_data[i].scale < j) {
+			//	scaling_save = ((j) * 16);
+			//	break;
+			//}
+			if (j == h_compress_data[i].scale) {
+				break;
+			}
+			scaling_save++;
+		}
+		c->scaling = scaling_save;
+		c->shift = h_compress_data[i].shift;
+		c->blocksize = blocksize;
+		ifs_data.push_back(c);
+	}
+
+	//std::cout << "just test : " << (int32_t)h_affine_transform_size4_1d[0] << std::endl;
+
+	//delete[] h_ranges;
+	//delete[] h_domains;
+
+	/*
+		L.後処理
+	*/
+
+	delete[] h_orig_img;
+	delete[] h_compress_data;
+
+	CHECK(cudaFree(d_orig_img));
+	CHECK(cudaFree(d_ranges));
+	CHECK(cudaFree(d_domains));
+
+	CHECK(cudaFree(d_rblock_sum));
+	CHECK(cudaFree(d_rblock_min));
+	CHECK(cudaFree(d_rblock_max));
+	
+	CHECK(cudaFree(d_dblock_sum));
+	CHECK(cudaFree(d_dblock_min));
+	CHECK(cudaFree(d_dblock_max));
+
+	CHECK(cudaFree(d_contrast_scaling));
+	CHECK(cudaFree(d_brightness_shift));
+
+	CHECK(cudaFree(d_mse));
+
+	CHECK(cudaDeviceSynchronize());
+
 	return ifs_data;
 }
+
+/*
+
+	fc_make_range_n_domain<<<resize_grid, resize_block>>>(d_orig_img, d, d)
+
+
+	dim3 resize_block(16, 16);
+	dim3 resize_grid(((img.cols >> 1) + resize_block.x - 1) / resize_block.x, ((img.rows >> 1) + resize_block.y - 1) / resize_block.y);
+	std::cout << "reduction grid :" << " x = " << resize_grid.x << " y = " << resize_grid.y << std::endl;
 	
-//	/*
-//		1.ブロック変換・縮小変換
-//	*/
-//
-//	//ブロック変換・縮小変換の為の起動スレッド数設定
-//	dim3 fc1block(dr_blocksize, dr_blocksize);
-//	dim3 fc1grid(rblock_cols, rblock_rows);
-//	std::cout << "reduction grid :" << " x = " << fc1grid.x << " y = " << fc1grid.y << std::endl;
-//	uint32_t orig_arraysize = img.total() * img.channels();
-//	uint8_t* h_orig_img = new uint8_t[orig_arraysize];
-//	uint8_t* d_orig_img;
-//	uint8_t* d_ranges;
-//	uint8_t* d_domains;
-//	
-//	CHECK(cudaMalloc((void**)&d_orig_img, sizeof(uint8_t) * orig_arraysize));
-//	CHECK(cudaMalloc((void**)&d_ranges, sizeof(uint8_t) * orig_arraysize));
-//	CHECK(cudaMalloc((void**)&d_domains, sizeof(uint8_t) * orig_arraysize >> 2));
-//
-//	fcrr_img2array(h_orig_img, img);
-//
-//	CHECK(cudaMemcpy(d_orig_img, h_orig_img, sizeof(uint8_t) * orig_arraysize, cudaMemcpyHostToDevice));
-//	fcrr_make_domains_n_ranges<<<fc1grid, fc1block>>>(d_orig_img, d_ranges, d_domains);
-//	CHECK(cudaDeviceSynchronize());
-//
-//	//uint8_t* h_ranges = new uint8_t[orig_arraysize];
-//	//uint8_t* h_domains = new uint8_t[orig_arraysize >> 2];
-//	//CHECK(cudaMemcpy(h_ranges, d_ranges, sizeof(uint8_t) * orig_arraysize, cudaMemcpyDeviceToHost));
-//	//CHECK(cudaMemcpy(h_domains, d_domains, sizeof(uint8_t) * orig_arraysize >> 2, cudaMemcpyDeviceToHost));
-//	//show_img2(h_ranges, img.cols, img.rows, dr_blocksize);
-//	//show_img2(h_domains, img.cols >> 1, img.rows >> 1, dr_blocksize);
-//
-//	/*
-//		2.ドメイン・レンジの総和・最小値最大値計算
-//	*/
-//
-//	//１つのスレッドブロックで複数のドメインを処理する
-//	dim3 fc2dblock(dr_blocksize, dr_blocksize, THREADBLOCK_MAX / dr_block_pixel_total);
-//	dim3 fc2dgrid(dblock_count / fc2dblock.z);
-//
-//	uint32_t* d_dblock_sum;
-//	uint32_t* d_dblock_min;
-//	uint32_t* d_dblock_max;
-//	CHECK(cudaMalloc((void**)&d_dblock_sum, sizeof(uint32_t) * dblock_count));
-//	CHECK(cudaMalloc((void**)&d_dblock_min, sizeof(uint32_t) * dblock_count));
-//	CHECK(cudaMalloc((void**)&d_dblock_max, sizeof(uint32_t) * dblock_count));
-//	fcrr_domain_summimmax<<<fc2dgrid, fc2dblock>>>(d_domains, dblock_count, d_dblock_sum, d_dblock_min, d_dblock_max);
-//
-//	//１つのスレッドブロックで複数のレンジを処理する
-//	dim3 fc2rblock(dr_blocksize, dr_blocksize, THREADBLOCK_MAX / dr_block_pixel_total);
-//	dim3 fc2rgrid(rblock_count / fc2rblock.z);
-//	uint32_t* d_rblock_sum;
-//	uint32_t* d_rblock_min;
-//	uint32_t* d_rblock_max;
-//	CHECK(cudaMalloc((void**)&d_rblock_sum, sizeof(uint32_t) * rblock_count));
-//	CHECK(cudaMalloc((void**)&d_rblock_min, sizeof(uint32_t) * rblock_count));
-//	CHECK(cudaMalloc((void**)&d_rblock_max, sizeof(uint32_t) * rblock_count));
-//	fcrr_range_summimmax<<<fc2rgrid, fc2rblock>>>(d_ranges, rblock_count, d_rblock_sum, d_rblock_min, d_rblock_max);
-//
-//	CHECK(cudaDeviceSynchronize());
-//
-//	/*
-//		3.コントラストスケーリング・輝度シフト計算
-//	*/
-//
-//	dim3 fc3block(THREADBLOCK_MAX);
-//	dim3 fc3grid(dblock_limit, rblock_count / THREADBLOCK_MAX);
-//
-//	double* d_contrast_scaling;
-//	uint32_t* d_brightness_shift;
-//
-//	CHECK(cudaMalloc((void**)&d_contrast_scaling, sizeof(double) * dblock_count * rblock_count));
-//	CHECK(cudaMalloc((void**)&d_brightness_shift, sizeof(uint32_t) * dblock_count * rblock_count));
-//	//CHECK(cudaMalloc((void**)&d_adjust_domains_for_ranges, sizeof(uint32_t) * dblock_count * rblock_count * dr_block_pixel_total));
-//
-//	//std::cout << "fc3grid : " << fc3grid.operator uint3 << "fc3block : " << fc3grid << std::endl;
-//
-//	fcrr_calc_scale_n_shift<<<fc3grid, fc3block>>>(d_dblock_sum,
-//												 d_dblock_min,
-//												 d_dblock_max,
-//												 d_rblock_sum,
-//									     		 d_rblock_min,
-//												 d_rblock_max,
-//												 dr_block_pixel_total,
-//											     d_contrast_scaling,
-//											     d_brightness_shift);
-//
-//	CHECK(cudaDeviceSynchronize());
-//
-//	/*
-//		4.コントラストスケーリング・輝度シフト適用・回転・鏡像変換・二乗計算・MSE計算（リダクション）
-//	*/
-//	//ブロックサイズに応じたコンスタントメモリを初期化する
-//	init_fcrr_affine_transformer(dr_blocksize);
-//	CHECK(cudaDeviceSynchronize());
-//	dim3 fc4block(dr_blocksize, dr_blocksize, THREADBLOCK_MAX / dr_block_pixel_total);
-//	dim3 fc4grid(dblock_limit , rblock_count / fc4block.z);
-//	//各レンジの各ドメインの各回転変換後のMSEを保存しておく
-//	uint32_t* d_mse;
-//	CHECK(cudaMalloc((void**)&d_mse, sizeof(uint32_t) * rblock_count * dblock_count * 8));
-//
-//	fcrr_transform_n_calc_mse<<<fc4grid, fc4block>>>(d_domains,
-//												   d_ranges,
-//												   d_contrast_scaling,
-//												   d_brightness_shift,
-//												   d_mse);
-//	CHECK(cudaDeviceSynchronize());
-//	//std::cout << sizeof(uint32_t) * rblock_count * dblock_count * 8 << "byte" << std::endl;
-//
-//	//uint32_t* h_mse = new uint32_t[rblock_count * dblock_count * 8];
-//	//CHECK(cudaMemcpy(h_mse, d_mse, sizeof(uint32_t) * rblock_count * dblock_count * 8, cudaMemcpyDeviceToHost));
-//
-//	//std::cout << "nukiuti : " << h_mse[231] << std::endl;
-//
-//	//delete[] h_mse;
-//
-//	/*
-//		5.各レンジ毎最小MSE・index計算(リダクション諦め)
-//	*/
-//
-//	dim3 fc5block(THREADBLOCK_MAX);
-//	dim3 fc5grid(rblock_count/ THREADBLOCK_MAX);
-//
-//	//レンジの数だけ圧縮データを保存する
-//	compress_data_part_reduce_domains_gpu* h_compress_data = new compress_data_part_reduce_domains_gpu[rblock_count];
-//	compress_data_part_reduce_domains_gpu* d_compress_data;
-//	CHECK(cudaMalloc((void**)&d_compress_data, sizeof(compress_data_part_reduce_domains_gpu) * rblock_count));
-//
-//	fcrr_save_min_mse<<<fc5grid, fc5block>>>(dblock_cols, dblock_rows, dblock_limit, blocksize, d_mse, d_contrast_scaling, d_brightness_shift, d_compress_data);
-//	CHECK(cudaDeviceSynchronize());
-//	CHECK(cudaMemcpy(h_compress_data, d_compress_data, sizeof(compress_data_part_reduce_domains_gpu) * rblock_count, cudaMemcpyDeviceToHost));
-//
-//	/*
-//		6.HOST側のデータを共通の形式に加工
-//	*/
-//
-//	CHECK(cudaDeviceSynchronize());
-//
-//	std::vector<ifs_transformer*> ifs_data;
-//
-//	for (int32_t i = 0; i < rblock_count; i++) {
-//		//std::cout << h_compress_data[i].rotate << std::endl;
-//		ifs_transformer* c = new ifs_transformer();
-//		c->error = std::numeric_limits<double>::max();
-//		c->rblock_x = (h_compress_data[i].rblock_id % rblock_rows)*blocksize;
-//		c->rblock_y = (h_compress_data[i].rblock_id / rblock_rows)*blocksize;
-//		c->dblock_x = (h_compress_data[i].dblock_id % dblock_rows)*blocksize;
-//		c->dblock_y = (h_compress_data[i].dblock_id / dblock_rows)*blocksize;
-//		c->affine = h_compress_data[i].rotate;
-//
-//		//std::cout << "h_comp:  " << h_compress_data[i].scale << std::endl;
-//
-//		uint8_t scaling_save = 0;
-//		for (double j = 0.0625; j < 1; j += 0.0625) {
-//			//if ((j - 0.0625) <= h_compress_data[i].scale && h_compress_data[i].scale < j) {
-//			//	scaling_save = ((j) * 16);
-//			//	break;
-//			//}
-//			if (j == h_compress_data[i].scale) {
-//				break;
-//			}
-//			scaling_save++;
-//		}
-//		c->scaling = scaling_save;
-//		c->shift = h_compress_data[i].shift;
-//		c->blocksize = blocksize;
-//		ifs_data.push_back(c);
-//	}
-//
-//	//std::cout << "just test : " << (int32_t)h_affine_transform_size4_1d[0] << std::endl;
-//
-//	//delete[] h_ranges;
-//	//delete[] h_domains;
-//
-//	/*
-//		L.後処理
-//	*/
-//
-//	delete[] h_orig_img;
-//	delete[] h_compress_data;
-//
-//	CHECK(cudaFree(d_orig_img));
-//	CHECK(cudaFree(d_ranges));
-//	CHECK(cudaFree(d_domains));
-//
-//	CHECK(cudaFree(d_rblock_sum));
-//	CHECK(cudaFree(d_rblock_min));
-//	CHECK(cudaFree(d_rblock_max));
-//	
-//	CHECK(cudaFree(d_dblock_sum));
-//	CHECK(cudaFree(d_dblock_min));
-//	CHECK(cudaFree(d_dblock_max));
-//
-//	CHECK(cudaFree(d_contrast_scaling));
-//	CHECK(cudaFree(d_brightness_shift));
-//
-//	CHECK(cudaFree(d_mse));
-//
-//	CHECK(cudaFree(d_compress_data));
-//
-//	CHECK(cudaDeviceSynchronize());
-//
-//	return ifs_data;
-//}
+	//元画像を配列として表す場合の配列サイズ(単位byte)；
+	uint32_t orig_img_array_size = img.total() * img.channels();
+	uint8_t* h_orig_img = new uint8_t[orig_img_array_size];
+	uint8_t* d_orig_img;
+	CHECK(cudaMalloc((void**)&d_orig_img, sizeof(uint8_t) * orig_img_array_size));
+	//縮小後画像を配列として表す場合の配列サイズ(単位byte);
+	uint32_t stage1_size = img.total() * img.channels() >> 2;
+	uint8_t* h_stage1 = new uint8_t[stage1_size];
+	uint8_t* d_stage1;
+	CHECK(cudaMalloc((void**)&d_stage1, sizeof(uint8_t) * stage1_size));
+
+	//(img, h_orig_img);
+	//show_img(h_orig_img, img.cols, img.rows);
+	img2blockarray(img, h_orig_img, 32);
+	show_img2(h_orig_img, img.rows, img.cols, 32);
+	CHECK(cudaMemcpy(d_orig_img, h_orig_img, sizeof(uint8_t) * orig_img_array_size, cudaMemcpyHostToDevice));
+	fc_resize2<<<resize_grid, resize_block>>>(d_orig_img, d_stage1, img.cols);
+	//fc_resize<<<resize_grid, resize_block>>>(d_orig_img, d_stage1, img.cols);
+	CHECK(cudaMemcpy(h_stage1, d_stage1, sizeof(uint8_t) * stage1_size, cudaMemcpyDeviceToHost));
+	show_img2(h_stage1 ,(img.rows >> 1), (img.cols >> 1), 16);
+	
+	/*
+		2.輝度シフト, コントラストスケーリング
+	*/
+
+	//dim3 resize_block(32, 32);
+	//dim3 resize_grid(1, 1);
+/*
+
+	//test_kernel<<<1, 1>>>();
+	CHECK(cudaDeviceSynchronize());
+
+	delete[] h_orig_img;
+	delete[] h_stage1;
+*/

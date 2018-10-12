@@ -285,8 +285,8 @@ output:
 	‚Ìblock_x, block_y‚ªƒuƒƒbƒN‚Ì‘å‚«‚³‚É‚È‚é
 */
 __global__ void fcrd_make_domains_n_ranges(uint8_t* d_orig_img, 
-									     uint8_t* d_ranges,
-									     uint8_t* d_domains){
+									       uint8_t* d_ranges,
+									       uint8_t* d_domains){
 
 	uint32_t rdblock_id = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x * blockDim.y;
 	uint32_t rdblock_thread_id = blockDim.x * threadIdx.y + threadIdx.x;
