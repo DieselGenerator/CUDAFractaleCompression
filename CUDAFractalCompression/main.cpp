@@ -5,8 +5,6 @@
 #include <iostream>
 #include <string>
 #include <chrono>
-#include <algorithm>    // std::copy
-#include <iterator>     // std::back_inserter
 
 #include <opencv2/core.hpp>
 #include <opencv2/core/cuda.hpp>
@@ -88,10 +86,8 @@ int main(int argc, char *argv[])
 				std::cout << "cpu (use opencv) compressing : " << entry.first << std::endl;
 				start = std::chrono::system_clock::now();
 
-				ifs_data = fc.compress(entry.second);
-				
-				/*テストコード*/
-				//import_csv("lena-512x512.png-mse0.csv", ifs_data);
+				//ifs_data = fc.compress(entry.second);
+				import_csv("lena-512x512.png-mse0.csv", ifs_data);
 
 				end = std::chrono::system_clock::now();
 				long long  encode_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -115,7 +111,7 @@ int main(int argc, char *argv[])
 					psnr = calcPSNR(entry.second, decompressed_image);
 					std::cout << "psnr : " << psnr << std::endl;
 
-					if (config::enable_cpu_opencv_output) {
+					if (config::output_decompress_image) {
 						cv::imwrite("out\\" + prefix + entry.first, decompressed_image);
 						std::cout << "output : out\\" + prefix + entry.first << std::endl;
 					}
@@ -184,7 +180,7 @@ int main(int argc, char *argv[])
 				long long decode_time;
 				const std::string prefix("(GPU original kernel)");
 
-				if (config::enable_gpu_decompress) {
+				if (true) {
 					std::cout << "GPU (original kernel) grayscale decompressing : " << entry.first << std::endl;
 					start = std::chrono::system_clock::now();
 
@@ -197,12 +193,13 @@ int main(int argc, char *argv[])
 					psnr = calcPSNR(entry.second, decompressed_image);
 					std::cout << "psnr : " << psnr << std::endl;
 
-					if (config::enable_gpu_output) {
+					if (config::output_decompress_image) {
 						cv::imwrite("out\\" + prefix + entry.first, decompressed_image);
 						std::cout << "output : out\\" + prefix + entry.first << std::endl;
-						export_csv(prefix + entry.first, ifs_data, elapsed, decode_time, psnr);
 					}
 				}
+
+				export_csv(prefix + entry.first, ifs_data, elapsed, decode_time, psnr);
 
 				std::cout << ++counter << " / " << images.h_grey_images.size() << " completed" << std::endl;
 				std::cout << separator << std::endl;
@@ -245,7 +242,7 @@ int main(int argc, char *argv[])
 					long long decode_time;
 					std::string prefix = std::string("(GPU reduce domains)") + std::to_string(dblock_limit);
 
-					if (config::enable_gpu_reduce_domains_decompress) {
+					if (true) {
 						std::cout << "GPU (reduce ranges kernel) grayscale decompressing : " << entry.first << std::endl;
 						start = std::chrono::system_clock::now();
 
@@ -258,20 +255,13 @@ int main(int argc, char *argv[])
 						psnr = calcPSNR(entry.second, decompressed_image);
 						std::cout << "psnr : " << psnr << std::endl;
 
-						if (config::enable_gpu_reduce_domains_output) {
+						if (config::output_decompress_image) {
 							cv::imwrite("out\\" + prefix + entry.first, decompressed_image);
 							std::cout << "output : out\\" + prefix + entry.first << std::endl;
 						}
 					}
 
-					std::string s_psnr = std::to_string(psnr);
-					std::string domain_count = std::to_string(dblock_limit);
-					std::string time = std::to_string(elapsed);
-					std::string filename = "(GPU redece domain)" + entry.first + "[psnr=" + s_psnr + ",domain_count=" + domain_count + ",time=" + time + "].jpg";
-
-					if (config::enable_gpu_reduce_domains_output) {
-						export_csv(filename, ifs_data, elapsed, decode_time, psnr);
-					}
+					export_csv(prefix + entry.first, ifs_data, elapsed, decode_time, psnr);
 
 					std::cout << ++counter << " / " << images.h_grey_images.size() << " completed" << std::endl;
 					std::cout << separator << std::endl;
@@ -286,8 +276,6 @@ int main(int argc, char *argv[])
 	{	
 		ifs_header header;
 		std::vector<ifs_transformer*> ifs_data;
-		std::vector<ifs_transformer*> ifs_inner_data;
-		std::vector<ifs_transformer*> ifs_outer_data;
 		uint32_t counter = 0;
 
 		if (config::enable_gpu_reduce_ranges_compress) {
@@ -296,46 +284,9 @@ int main(int argc, char *argv[])
 				uint32_t dblock_cols = (entry.second.cols / RANGE_SIZE) >> 1;
 				uint32_t dblock_rows = (entry.second.rows / RANGE_SIZE) >> 1;
 
-				//外周をどれだけ大きいブロックとして処理するか
-				for (uint32_t reduce_range_config = 0; reduce_range_config <= 2; reduce_range_config++){
-
-					//内部のブロックサイズ
-					uint32_t inner_blocksize = 4;
-					//外部のブロックサイズ
-					uint32_t outer_blocksize = 8;
-					//内部部分を計算する時の外周分の大きさ(ブロック単位)
-					uint32_t periphery_inner_size = 2;
-					//外周部分を計算する時の外周分の大きさ(ブロック単位)
-					uint32_t periphery_outer_size = 1;
-	
-					/*
-						レンジの減らし方config部分
-					*/
-					switch (reduce_range_config) {
-					case 0:
-						inner_blocksize = 4;
-						outer_blocksize = 8;
-						periphery_inner_size = 2;
-						periphery_outer_size = 1;
-						break;
-					case 1:
-						inner_blocksize = 4;
-						outer_blocksize = 8;
-						periphery_inner_size = 4;
-						periphery_outer_size = 2;
-						break;
-					case 2:
-						inner_blocksize = 4;
-						outer_blocksize = 16;
-						periphery_inner_size = 4;
-						periphery_outer_size = 1;
-						break;
-					default:
-						inner_blocksize = 4;
-						outer_blocksize = 8;
-						periphery_inner_size = 2;
-						periphery_outer_size = 1;
-					}
+				//デフォルトの並列ブロック数
+				//uint32_t dblock_limit = dblock_cols * dblock_rows;
+				for (uint32_t reduce_range_config = 0; reduce_range_config <= 0; reduce_range_config++){
 
 					header.image_height = entry.second.rows;
 					header.image_width = entry.second.cols;
@@ -343,8 +294,8 @@ int main(int argc, char *argv[])
 					std::cout << "GPU (reduce domains kernel) grayscale compressing : " << entry.first << std::endl;
 					start = std::chrono::system_clock::now();
 
-					ifs_inner_data = launch_reduce_ranges_compress_kernel(entry.second, inner_blocksize, true, periphery_inner_size);
-					ifs_outer_data = launch_reduce_ranges_compress_kernel(entry.second, outer_blocksize, false, periphery_outer_size);
+					ifs_data = launch_reduce_ranges_compress_kernel(entry.second, 0);
+					//ifs_data = launch_reduce_ranges_compress_kernel(entry.second, RANGE_SIZE, dblock_limit);
 
 					cv::waitKey();
 
@@ -352,18 +303,11 @@ int main(int argc, char *argv[])
 					auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 					std::cout << "elapsed " << elapsed << " milli sec \n";
 
-					/*
-						2つのベクタを1つのベクタに統合する
-					*/
-					ifs_data.clear();
-					std::copy(ifs_inner_data.begin(), ifs_inner_data.end(), std::back_inserter(ifs_data));
-					ifs_data.insert(ifs_data.end(), ifs_outer_data.begin(), ifs_outer_data.end());
-
 					double psnr;
 					long long decode_time;
-					std::string prefix = std::string("(GPU reduce ranges) range config ") + std::to_string(reduce_range_config);
+					std::string prefix = std::string("(GPU reduce renges)") + std::to_string(1024);
 
-					if (config::enable_gpu_reduce_ranges_decompress) {
+					if (true) {
 						std::cout << "GPU (reduce ranges kernel) grayscale decompressing : " << entry.first << std::endl;
 						start = std::chrono::system_clock::now();
 
@@ -376,15 +320,13 @@ int main(int argc, char *argv[])
 						psnr = calcPSNR(entry.second, decompressed_image);
 						std::cout << "psnr : " << psnr << std::endl;
 
-						if (config::enable_gpu_reduce_ranges_output) {
+						if (config::output_decompress_image) {
 							cv::imwrite("out\\" + prefix + entry.first, decompressed_image);
 							std::cout << "output : out\\" + prefix + entry.first << std::endl;
 						}
 					}
 
-					if (config::enable_gpu_reduce_ranges_output) {
-						export_csv(prefix + entry.first, ifs_data, elapsed, decode_time, psnr);
-					}
+					export_csv(prefix + entry.first, ifs_data, elapsed, decode_time, psnr);
 
 					std::cout << ++counter << " / " << images.h_grey_images.size() << " completed" << std::endl;
 					std::cout << separator << std::endl;
@@ -444,6 +386,7 @@ int main(int argc, char *argv[])
 				std::string s_quality = std::to_string(param[1]);
 				std::string time = std::to_string(elapsed);
 				std::string filename = "out\\(CPU-JPEG)" + entry.first + "[psnr=" + psnr + ",quality=" + s_quality + ",time=" + time + "].jpg";
+				
 				
 				if (config::enable_jpeg_output) {
 					cv::imwrite(filename, jpegimage);
